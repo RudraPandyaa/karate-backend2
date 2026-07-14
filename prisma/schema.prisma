@@ -1,0 +1,314 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== AUTH / USERS =====
+
+enum Role {
+  GUEST
+  ATHLETE
+  SCOREKEEPER
+  REFEREE
+  ORGANIZER
+  ADMIN
+  SUPER_ADMIN
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  email               String               @unique
+  password            String
+  name                String
+  role                Role                 @default(GUEST)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  organizationMembers OrganizationMember[]
+  refreshTokens       RefreshToken[]
+}
+
+model RefreshToken {
+  id         String   @id @default(cuid())
+  tokenHash  String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ===== TOURNAMENT STRUCTURE =====
+
+enum TournamentStatus {
+  DRAFT
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+model Tournament {
+  id             String           @id @default(cuid())
+  name           String
+  location       String
+  startDate      DateTime
+  endDate        DateTime
+  status         TournamentStatus @default(DRAFT)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  organizationId String
+  categories     Category[]
+  tatamis        Tatami[]
+}
+
+enum Discipline {
+  KATA
+  KUMITE
+  TEAM_KATA
+  TEAM_KUMITE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  MIXED
+}
+
+model Category {
+  id           String     @id @default(cuid())
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  name       String // e.g. "SUB JUNIOR 10 YRS MALE KUMITE -25KG"
+  ageGroup   String // e.g. "SUB JUNIOR 10 YRS"
+  gender     Gender
+  discipline Discipline
+  weightMin  Float? // null = no lower bound
+  weightMax  Float? // null = "+XXKG" (no upper bound)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  athletes CategoryAthlete[]
+  matches  Match[]
+
+  @@unique([tournamentId, name])
+}
+
+model ScoreEvent {
+  id        String    @id @default(cuid())
+  matchId   String
+  match     Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  athleteId String
+  athlete   Athlete   @relation(fields: [athleteId], references: [id])
+  corner    Corner
+  type      ScoreType
+  points    Int
+  exchangeId String
+  wasUndone  Boolean  
+  timestamp DateTime  @default(now())
+}
+
+// ===== ATHLETES =====
+
+model Athlete {
+  id      String @id @default(cuid())
+  name    String
+  state   String // e.g. "TAMILNADU", "West Bengal"
+  country String @default("IND")
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  dateOfBirth   DateTime?
+  categories    CategoryAthlete[]
+  redMatches    Match[]           @relation("RedCorner")
+  blueMatches   Match[]           @relation("BlueCorner")
+  wonMatches    Match[]           @relation("Winner")
+  scoreEvents   ScoreEvent[]
+  penaltyEvents PenaltyEvent[]
+}
+
+// join table: one athlete can be entered in a category, one category has many athletes
+model CategoryAthlete {
+  id         String   @id @default(cuid())
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  athleteId  String
+  athlete    Athlete  @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  seed       Int? // optional seeding number for bracket generation
+
+  @@unique([categoryId, athleteId])
+}
+
+// ===== TATAMI (COURT/MAT) =====
+
+model Tatami {
+  id           String     @id @default(cuid())
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  number       Int // e.g. Tatami 1, Tatami 2
+  name         String? // optional display name
+
+  matches Match[]
+
+  @@unique([tournamentId, number])
+}
+
+// ===== MATCHES =====
+
+enum MatchStatus {
+  SCHEDULED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum SenshuHolder {
+  NONE
+  RED
+  BLUE
+}
+
+enum MatchResultType {
+  POINT_GAP
+  TIME
+  HANSOKU
+  KIKEN
+  HANTEI
+  SENSHU
+}
+
+enum MatchRound {
+  ROUND_1
+  ROUND_2
+  ROUND_3
+  QUARTER_FINAL
+  SEMI_FINAL
+  FINAL
+  REPECHAGE
+  BRONZE
+  FINAL_MATCH
+  QUARTERFINAL
+  SEMIFINAL
+}
+
+model Match {
+  id         String   @id @default(cuid())
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  tatamiId String?
+  tatami   Tatami? @relation(fields: [tatamiId], references: [id])
+
+  round       MatchRound // e.g. "Pool 1/2", "Final", "Semi Final"
+  bracketSlot Int? // position in bracket tree, for ordering
+
+  redAthleteId  String?
+  redAthlete    Athlete? @relation("RedCorner", fields: [redAthleteId], references: [id])
+  blueAthleteId String?
+  blueAthlete   Athlete? @relation("BlueCorner", fields: [blueAthleteId], references: [id])
+
+  status MatchStatus @default(SCHEDULED)
+
+  redScore  Int @default(0)
+  blueScore Int @default(0)
+
+  senshu SenshuHolder @default(NONE)
+  senshuLocked      Boolean @default(false) // true = forfeited, can never be (re)awarded
+  senshuScoreEventId String? // the ScoreEvent.id that granted current senshu, for undo tracing
+
+  timerSeconds  Int @default(180) // 3:00 default from your screenshot
+  timeRemaining Int @default(180)
+  last15SecondsSenshuLost Boolean @default(false)
+  winnerId String?
+  winner   Athlete? @relation("Winner", fields: [winnerId], references: [id])
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  scoreEvents   ScoreEvent[]
+  resultType    MatchResultType?
+  penaltyEvents PenaltyEvent[]
+  kataScores    KataScore[]
+  nextMatchId   String?
+  nextMatchSlot String?
+  pool Int?
+}
+
+// ===== SCORING =====
+
+enum ScoreType {
+  YUKO // 1 point
+  WAZA_ARI // 2 points
+  IPPON // 3 points
+}
+
+enum Corner {
+  RED
+  BLUE
+}
+
+enum PenaltyType {
+  CHUI // warning
+  HANSOKU_CHUI // +2 to opponent
+  HANSOKU // disqualification
+}
+
+model PenaltyEvent {
+  id        String      @id @default(cuid())
+  matchId   String
+  match     Match       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  athleteId String
+  athlete   Athlete     @relation(fields: [athleteId], references: [id])
+  corner    Corner
+  type      PenaltyType
+  timestamp DateTime    @default(now())
+}
+
+model Organization {
+  id          String               @id @default(cuid())
+  name        String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  tournaments Tournament[]
+  members     OrganizationMember[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String @id @default(cuid())
+  organizationId String
+  userId         String
+  role           Role
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+}
+
+model KataScore {
+  id             String   @id @default(cuid())
+  matchId        String
+  match          Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  athleteId      String
+  judgeId        String // which referee/judge submitted this
+  technicalScore Float?
+  athleticScore  Float?
+  totalScore     Float
+  createdAt      DateTime @default(now())
+}

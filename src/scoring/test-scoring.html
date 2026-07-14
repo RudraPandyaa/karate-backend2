@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Scoring + Timer Test</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+  <h1>Karate Scoring Test</h1>
+  <button onclick="startTest()">Start Full Test</button>
+
+  <script>
+    const socket = io('http://localhost:3000/scoring');
+    let matchId = "cmretqyud000j513kx6zqj514"; // Change this
+
+    function startTest() {
+      socket.emit('joinMatch', { matchId });
+      socket.emit('startTimer', { matchId });
+    }
+
+    socket.on('timerUpdate', (data) => {
+      console.log('Timer:', data.timeRemaining);
+    });
+
+    socket.on('scoreUpdated', (data) => {
+      console.log('Updated Match:', data.match);
+    });
+  </script>
+</body>
+</html>
