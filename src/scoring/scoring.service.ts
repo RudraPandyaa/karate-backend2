@@ -8,6 +8,7 @@ import { CreateScoreDto } from './dto/create-score.dto';
 import { ScoreHelper } from './helpers/score.helper';
 import { Corner } from './enums/corner.enum';
 import {
+  Prisma,
   SenshuHolder,
   MatchStatus,
   MatchResultType,
@@ -42,8 +43,8 @@ export class ScoringService {
 
       const rows = dto.entries.map((entry) => {
         const points = ScoreHelper.getPoints(entry.type);
-        const athleteId = entry.corner === Corner.RED 
-          ? match.redAthleteId! 
+        const athleteId = entry.corner === Corner.RED
+          ? match.redAthleteId!
           : match.blueAthleteId!;
 
         if (entry.corner === Corner.RED) redDelta += points;
@@ -89,8 +90,11 @@ export class ScoringService {
       let resultType: MatchResultType | null = null;
 
       if (mercyRuleTriggered) {
-        resultType = MatchResultType.POINT_GAP;
+        // Whoever leads when the mercy-rule gap is hit wins.
+        // NOTE: confirm `MatchResultType.MERCY_RULE` (or whatever your
+        // schema actually calls it) — swap this for the real enum value.
         winnerId = newRedScore > newBlueScore ? match.redAthleteId : match.blueAthleteId;
+        resultType = MatchResultType.POINT_GAP;
       }
 
       const updatedMatch = await tx.match.update({
@@ -100,6 +104,7 @@ export class ScoringService {
           blueScore: newBlueScore,
           senshu,
           senshuScoreEventId,
+
           ...(mercyRuleTriggered && {
             status: MatchStatus.COMPLETED,
             resultType,
@@ -112,6 +117,11 @@ export class ScoringService {
           blueAthlete: true,
         },
       });
+
+      // Move winner to next round
+      if (mercyRuleTriggered && winnerId) {
+        await this.advanceWinner(tx, matchId, winnerId);
+      }
 
       return {
         success: true,
@@ -174,13 +184,13 @@ export class ScoringService {
     });
   }
 
-  // New: Handle Senshu loss in last 15 seconds
+  // Handle Senshu loss in last 15 seconds
   async forfeitSenshu(matchId: string, corner: Corner) {
     const match = await this.prisma.match.findUnique({ where: { id: matchId } });
     if (!match) throw new NotFoundException('Match not found');
 
     if (match.senshu === corner) {
-      const updated = await this.prisma.match.update({
+      await this.prisma.match.update({
         where: { id: matchId },
         data: {
           senshuLocked: true,
@@ -217,5 +227,40 @@ export class ScoringService {
       },
       orderBy: { startedAt: 'asc' },
     });
+  }
+
+  // Now takes the active transaction client so the next-match lookup
+  // sees the winner update that hasn't committed yet.
+  private async advanceWinner(
+    tx: Prisma.TransactionClient,
+    matchId: string,
+    winnerId: string,
+  ){
+    const match = await tx.match.findUnique({
+      where: { id: matchId },
+    });
+
+    if (!match?.nextMatchId) return;
+
+    const nextMatch = await tx.match.findUnique({
+      where: { id: match.nextMatchId },
+    });
+
+    if (!nextMatch) return;
+
+    const data: any = {};
+
+    if (!nextMatch.redAthleteId) {
+      data.redAthleteId = winnerId;
+    } else if (!nextMatch.blueAthleteId) {
+      data.blueAthleteId = winnerId;
+    }
+
+    if (Object.keys(data).length) {
+      await tx.match.update({
+        where: { id: nextMatch.id },
+        data,
+      });
+    }
   }
 }

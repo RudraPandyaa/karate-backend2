@@ -312,3 +312,11 @@ model KataScore {
   totalScore     Float
   createdAt      DateTime @default(now())
 }
+
+model TournamentSettings {
+  id                   String   @id @default("default")
+  mercyRuleGap         Int      @default(8)
+  matchDurationSeconds Int      @default(180)
+  senshuEnabled        Boolean  @default(true)
+  updatedAt            DateTime @updatedAt
+}

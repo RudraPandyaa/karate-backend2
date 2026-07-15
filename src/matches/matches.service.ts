@@ -62,10 +62,10 @@ export class MatchesService {
   async update(id: string, dto: UpdateMatchDto) {
     await this.findOne(id);
 
-    return this.prisma.match.update({
+    const updatedMatch = await this.prisma.match.update({
       where: { id },
       data: {
-        round: dto.round as MatchRound,           // ← Fixed
+        round: dto.round as MatchRound,
         status: dto.status as MatchStatus,
         redScore: dto.redScore,
         blueScore: dto.blueScore,
@@ -73,7 +73,6 @@ export class MatchesService {
         timeRemaining: dto.timeRemaining,
         timerSeconds: dto.timerSeconds,
         tatamiId: dto.tatamiId,
-        // Add any other fields you want to allow updating
       },
       include: {
         category: true,
@@ -81,10 +80,48 @@ export class MatchesService {
         blueAthlete: true,
       },
     });
+
+    if (
+      dto.status === MatchStatus.COMPLETED &&
+      dto.winnerId
+    ) {
+      await this.advanceWinner(id, dto.winnerId);
+    }
+
+    return updatedMatch;
   }
 
   async remove(id: string) {
     await this.findOne(id);
     return this.prisma.match.delete({ where: { id } });
+  }
+
+  private async advanceWinner(matchId: string, winnerId: string) {
+    const match = await this.prisma.match.findUnique({
+      where: { id: matchId },
+    });
+
+    if (!match?.nextMatchId) return;
+
+    const nextMatch = await this.prisma.match.findUnique({
+      where: { id: match.nextMatchId },
+    });
+
+    if (!nextMatch) return;
+
+    const data: any = {};
+
+    if (!nextMatch.redAthleteId) {
+      data.redAthleteId = winnerId;
+    } else if (!nextMatch.blueAthleteId) {
+      data.blueAthleteId = winnerId;
+    }
+
+    if (Object.keys(data).length > 0) {
+      await this.prisma.match.update({
+        where: { id: nextMatch.id },
+        data,
+      });
+    }
   }
 }
