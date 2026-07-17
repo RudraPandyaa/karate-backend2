@@ -10,7 +10,10 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.useStaticAssets(path.join(__dirname, '..', 'public'));
   app.enableCors({
-    origin: 'http://localhost:3000',
+    origin: [
+      'http://localhost:3000',
+      'https://karate-frontend.onrender.com',
+    ],
     credentials: true,
   });
   app.useGlobalPipes(
