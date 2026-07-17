@@ -16,6 +16,8 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Role } from '@prisma/client';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @ApiTags('matches')
 @ApiBearerAuth('JWT')
@@ -42,11 +44,16 @@ export class MatchesController {
     return this.matchesService.findOne(id);
   }
 
-  @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN, Role.ORGANIZER, Role.REFEREE, Role.SCOREKEEPER)
+  @ApiBearerAuth('JWT')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN, Role.ORGANIZER, Role.REFEREE, Role.SCOREKEEPER)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateMatchDto) {
-    return this.matchesService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateMatchDto,
+    @CurrentUser() currentUser: { userId: string; email: string; role: Role },
+  ) {
+    return this.matchesService.update(id, dto, currentUser.role);
   }
 
   @UseGuards(RolesGuard)

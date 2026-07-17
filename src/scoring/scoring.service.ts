@@ -203,17 +203,35 @@ export class ScoringService {
   }
 
   async getMatchWithHistory(matchId: string) {
-    return this.prisma.match.findUnique({
+    const match = await this.prisma.match.findUnique({
       where: { id: matchId },
       include: {
-        scoreEvents: {
-          where: { wasUndone: false },
-          orderBy: { timestamp: 'desc' },
+        redAthlete: {
+          select: {
+            id: true,
+            name: true,
+            photoUrl: true,        // ← Add this
+          }
         },
-        redAthlete: true,
-        blueAthlete: true,
+        blueAthlete: {
+          select: {
+            id: true,
+            name: true,
+            photoUrl: true,        // ← Add this
+          }
+        },
+        category: true,
+        scoreEvents: {
+          orderBy: { timestamp: 'desc' },
+          take: 10,
+        },
+        // Add other includes if needed
       },
     });
+
+    if (!match) throw new NotFoundException('Match not found');
+
+    return match;
   }
 
   async getAllLiveMatches() {

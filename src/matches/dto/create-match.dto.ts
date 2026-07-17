@@ -1,7 +1,7 @@
 import { IsString, IsOptional, IsInt, IsEnum } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { MatchStatus, SenshuHolder } from '@prisma/client';
-import { MatchRound } from '@prisma/client';
+import { MatchStatus, MatchRound } from '@prisma/client';
+
 export class CreateMatchDto {
   @ApiProperty()
   @IsString()
@@ -12,10 +12,9 @@ export class CreateMatchDto {
   @IsString()
   tatamiId?: string;
 
-  @ApiProperty()
-  @IsString()
+  @ApiProperty({ enum: MatchRound })
+  @IsEnum(MatchRound)
   round: MatchRound;
-
   @ApiProperty({ required: false })
   @IsOptional()
   @IsInt()
@@ -30,6 +29,16 @@ export class CreateMatchDto {
   @IsOptional()
   @IsString()
   blueAthleteId?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  refereeId?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  scorekeeperId?: string;
 
   @ApiProperty({ enum: MatchStatus, default: 'SCHEDULED' })
   @IsOptional()

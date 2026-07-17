@@ -82,4 +82,16 @@ export class TournamentsController {
   ) {
     return this.tournamentsService.removeCategory(id, categoryId);
   }
+
+  @Public()
+  @Get(':id/matches')
+  getMatches(@Param('id') id: string) {
+    return this.tournamentsService.getMatches(id);
+  }
+
+  @Public()
+  @Get(':id/athletes')
+  getAthletes(@Param('id') id: string) {
+    return this.tournamentsService.getAthletes(id);
+  }
 }

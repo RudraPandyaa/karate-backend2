@@ -1,7 +1,5 @@
-import { Controller, Get, Patch, Param, Body, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -12,23 +10,24 @@ import { Role } from '@prisma/client';
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
-  @UseGuards(JwtAuthGuard)
-  @Get('me')
-  getProfile(@CurrentUser() user: { id: string }) {
-    return this.usersService.findById(user.id);
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @Get()
+  findAll() {
+    return this.usersService.findAll();
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Patch('me')
-  updateProfile(
-    @CurrentUser() user: { id: string },
-    @Body() dto: UpdateProfileDto,
-  ) {
-    return this.usersService.updateProfile(user.id, dto);
+  // Narrow lookup for populating referee/scorekeeper pickers on the
+  // match form — only returns users who can actually hold that role.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN, Role.ORGANIZER)
+  @Get('by-role/:role')
+  findByRole(@Param('role') role: Role) {
+    return this.usersService.findByRole(role);
   }
 
-  @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
   @Patch(':id/role')
   updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
     return this.usersService.updateRole(id, dto.role);

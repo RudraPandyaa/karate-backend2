@@ -42,4 +42,14 @@ export class UpdateMatchDto {
   @IsOptional()
   @IsString()
   tatamiId?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  refereeId?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  scorekeeperId?: string;
 }

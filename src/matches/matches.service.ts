@@ -1,22 +1,40 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMatchDto } from './dto/create-match.dto';
 import { UpdateMatchDto } from './dto/update-match.dto';
-import { MatchRound, MatchStatus } from '@prisma/client';   // ← Add this
+import { MatchRound, MatchStatus, Role } from '@prisma/client';
 
 @Injectable()
 export class MatchesService {
   constructor(private prisma: PrismaService) {}
 
-  create(dto: CreateMatchDto) {
+  private async assertHasRole(userId: string | undefined | null, role: Role) {
+    if (!userId) return;
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new BadRequestException(`No user found with id ${userId}`);
+    if (user.role !== role) {
+      throw new BadRequestException(
+        `User ${user.name} does not hold the ${role} role (currently ${user.role})`,
+      );
+    }
+  }
+
+  async create(dto: CreateMatchDto) {
+    await Promise.all([
+      this.assertHasRole(dto.refereeId, Role.REFEREE),
+      this.assertHasRole(dto.scorekeeperId, Role.SCOREKEEPER),
+    ]);
+
     return this.prisma.match.create({
       data: {
         categoryId: dto.categoryId,
-        round: dto.round as MatchRound,           // ← Fixed
+        round: dto.round as MatchRound,
         bracketSlot: dto.bracketSlot,
         redAthleteId: dto.redAthleteId,
         blueAthleteId: dto.blueAthleteId,
         tatamiId: dto.tatamiId,
+        refereeId: dto.refereeId,
+        scorekeeperId: dto.scorekeeperId,
         status: (dto.status as MatchStatus) || MatchStatus.SCHEDULED,
         timerSeconds: dto.timerSeconds || 180,
         timeRemaining: dto.timerSeconds || 180,
@@ -26,6 +44,8 @@ export class MatchesService {
         redAthlete: true,
         blueAthlete: true,
         tatami: true,
+        referee: { select: { id: true, name: true, email: true } },
+        scorekeeper: { select: { id: true, name: true, email: true } },
       },
     });
   }
@@ -38,6 +58,8 @@ export class MatchesService {
         redAthlete: true,
         blueAthlete: true,
         tatami: true,
+        referee: { select: { id: true, name: true, email: true } },
+        scorekeeper: { select: { id: true, name: true, email: true } },
       },
     });
   }
@@ -52,6 +74,8 @@ export class MatchesService {
         tatami: true,
         scoreEvents: true,
         penaltyEvents: true,
+        referee: { select: { id: true, name: true, email: true } },
+        scorekeeper: { select: { id: true, name: true, email: true } },
       },
     });
 
@@ -59,8 +83,22 @@ export class MatchesService {
     return match;
   }
 
-  async update(id: string, dto: UpdateMatchDto) {
+  async update(id: string, dto: UpdateMatchDto, requesterRole: Role) {
     await this.findOne(id);
+
+    const isAssigningOfficials = dto.refereeId !== undefined || dto.scorekeeperId !== undefined;
+    if (
+      isAssigningOfficials &&
+      requesterRole !== Role.ADMIN &&
+      requesterRole !== Role.SUPER_ADMIN
+    ) {
+      throw new ForbiddenException('Only ADMIN can assign referee or scorekeeper');
+    }
+
+    await Promise.all([
+      this.assertHasRole(dto.refereeId, Role.REFEREE),
+      this.assertHasRole(dto.scorekeeperId, Role.SCOREKEEPER),
+    ]);
 
     const updatedMatch = await this.prisma.match.update({
       where: { id },
@@ -73,18 +111,19 @@ export class MatchesService {
         timeRemaining: dto.timeRemaining,
         timerSeconds: dto.timerSeconds,
         tatamiId: dto.tatamiId,
+        refereeId: dto.refereeId,
+        scorekeeperId: dto.scorekeeperId,
       },
       include: {
         category: true,
         redAthlete: true,
         blueAthlete: true,
+        referee: { select: { id: true, name: true, email: true } },
+        scorekeeper: { select: { id: true, name: true, email: true } },
       },
     });
 
-    if (
-      dto.status === MatchStatus.COMPLETED &&
-      dto.winnerId
-    ) {
+    if (dto.status === MatchStatus.COMPLETED && dto.winnerId) {
       await this.advanceWinner(id, dto.winnerId);
     }
 

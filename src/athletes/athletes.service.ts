@@ -3,11 +3,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateAthleteDto } from './dto/create-athlete.dto';
 import { UpdateAthleteDto } from './dto/update-athlete.dto';
 import { EnrollAthleteDto } from './dto/enroll-athlete.dto';
+import { UploadService } from 'src/upload/upload.service';
 
 @Injectable()
 export class AthletesService {
-  constructor(private prisma: PrismaService) {}
-
+  constructor(
+    private prisma: PrismaService,
+    private uploadService: UploadService,
+  ) {}
   create(dto: CreateAthleteDto) {
     return this.prisma.athlete.create({
       data: {
@@ -29,6 +32,20 @@ export class AthletesService {
         : undefined,
       orderBy: { name: 'asc' },
       include: { _count: { select: { categories: true } } },
+    });
+  }
+
+  async uploadPhoto(id: string, file: Express.Multer.File) {
+    console.log('Uploading photo for athlete:', id, 'File size:', file.size);
+
+    await this.findOne(id);
+
+    const photoUrl = await this.uploadService.uploadImage(file);
+    console.log('Photo URL received:', photoUrl);
+
+    return this.prisma.athlete.update({
+      where: { id },
+      data: { photoUrl },
     });
   }
 

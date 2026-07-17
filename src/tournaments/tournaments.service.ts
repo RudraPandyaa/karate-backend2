@@ -54,10 +54,16 @@ export class TournamentsService {
       include: {
         categories: true,
         tatamis: true,
+        _count: { select: { categories: true } },
       },
     });
     if (!tournament) throw new NotFoundException('Tournament not found');
-    return tournament;
+
+    const matchesCount = await this.prisma.match.count({
+      where: { category: { tournamentId: id } },
+    });
+
+    return { ...tournament, matchesCount };
   }
 
   async update(id: string, dto: UpdateTournamentDto) {
@@ -100,5 +106,35 @@ export class TournamentsService {
     });
     if (!category) throw new NotFoundException('Category not found');
     return this.prisma.category.delete({ where: { id: categoryId } });
+  }
+
+  async getMatches(tournamentId: string) {
+    await this.findOne(tournamentId);
+    return this.prisma.match.findMany({
+      where: { category: { tournamentId } },
+      include: {
+        redAthlete: true,
+        blueAthlete: true,
+        category: true,
+        tatami: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async getAthletes(tournamentId: string) {
+    await this.findOne(tournamentId);
+
+    const entries = await this.prisma.categoryAthlete.findMany({
+      where: { category: { tournamentId } },
+      include: { athlete: true },
+    });
+
+    const byId = new Map<string, (typeof entries)[number]['athlete']>();
+    for (const entry of entries) {
+      if (!byId.has(entry.athleteId)) byId.set(entry.athleteId, entry.athlete);
+    }
+
+    return Array.from(byId.values());
   }
 }

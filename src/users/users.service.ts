@@ -1,42 +1,40 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { UpdateProfileDto } from './dto/update-profile.dto';
-import { Role } from '@prisma/client/wasm';
+import { Role } from '@prisma/client';
+
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
 
-  async findById(id: string) {
-    return this.prisma.user.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        createdAt: true,
-        // your preference fields here too
-      },
+  async findAll() {
+    return this.prisma.user.findMany({
+      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
-  async updateProfile(id: string, dto: UpdateProfileDto) {
+  async findByRole(role: Role) {
+    return this.prisma.user.findMany({
+      where: { role },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async updateRole(id: string, role: Role) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    // SUPER_ADMIN can't be demoted/promoted through this route — avoids an
+    // ADMIN accidentally locking themselves or another super-admin out.
+    if (user.role === Role.SUPER_ADMIN || role === Role.SUPER_ADMIN) {
+      throw new ForbiddenException('SUPER_ADMIN cannot be assigned through this endpoint');
+    }
+
     return this.prisma.user.update({
       where: { id },
-      data: dto,
+      data: { role },
+      select: { id: true, name: true, email: true, role: true },
     });
   }
-
-async updateRole(id: string, role: Role) {
-  return this.prisma.user.update({
-    where: { id },
-    data: { role },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-    },
-  });
-}
 }
