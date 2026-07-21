@@ -6,6 +6,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Public } from '../auth/decorators/public.decorator';
 
 @ApiTags('bracket')
 @ApiBearerAuth('JWT')
@@ -15,13 +16,13 @@ export class BracketController {
   constructor(private readonly bracketService: BracketService) {}
 
   @Post('generate')
-  @Roles(Role.ORGANIZER, Role.ADMIN)
+  @Roles(Role.ORGANIZER, Role.ADMIN, Role.SUPER_ADMIN)
   async generateBracket(@Body() dto: GenerateBracketDto) {
     return this.bracketService.generateBracket(dto);
   }
 
   @Post('tatami/:tatamiId/assign')
-  @Roles(Role.ORGANIZER, Role.ADMIN)
+  @Roles(Role.ORGANIZER, Role.ADMIN, Role.SUPER_ADMIN)
   async assignToTatami(
     @Param('tatamiId') tatamiId: string,
     @Body() dto: AssignMatchesToTatamiDto,
@@ -29,11 +30,13 @@ export class BracketController {
     return this.bracketService.assignMatchesToTatami(tatamiId, dto.matchIds);
   }
 
+  @Public()
   @Get('tatami/:tatamiId')
   async getTatamiSchedule(@Param('tatamiId') tatamiId: string) {
     return this.bracketService.getTatamiSchedule(tatamiId);
   }
 
+  @Public()
   @Get('category/:categoryId')
   async getCategoryBracket(@Param('categoryId') categoryId: string) {
     return this.bracketService.getCategoryBracket(categoryId);

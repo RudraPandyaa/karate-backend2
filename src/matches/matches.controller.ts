@@ -26,12 +26,12 @@ export class MatchesController {
   constructor(private matchesService: MatchesService) {}
 
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN, Role.ORGANIZER, Role.REFEREE, Role.SCOREKEEPER)
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN, Role.ORGANIZER, Role.REFEREE, Role.SCOREKEEPER)
   @Post()
   create(@Body() dto: CreateMatchDto) {
     return this.matchesService.create(dto);
   }
-  
+
   @Public()
   @Get()
   findAll() {
@@ -57,7 +57,7 @@ export class MatchesController {
   }
 
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN, Role.ORGANIZER)
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN, Role.ORGANIZER)
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.matchesService.remove(id);

@@ -9,8 +9,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { ScoreType } from '@prisma/client';
-import { Corner } from '../enums/corner.enum';
+import { ScoreType, Corner } from '@prisma/client';
+
 export class ScoreEntryDto {
   @ApiProperty({ enum: Corner })
   @IsEnum(Corner)

@@ -3,10 +3,70 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { Prisma, Gender, Discipline } from '@prisma/client';
-
+import { RegisterAthleteDto } from './dto/register-athlete';
 @Injectable()
 export class CategoriesService {
   constructor(private prisma: PrismaService) {}
+    async registerAthlete(
+    categoryId: string,
+    dto: RegisterAthleteDto,
+  ) {
+    // 1. Check category exists
+    const category = await this.prisma.category.findUnique({
+      where: {
+        id: categoryId,
+      },
+    });
+
+    if (!category) {
+      throw new NotFoundException(
+        `Category ${categoryId} not found`,
+      );
+    }
+
+    // 2. Check athlete exists
+    const athlete = await this.prisma.athlete.findUnique({
+      where: {
+        id: dto.athleteId,
+      },
+    });
+
+    if (!athlete) {
+      throw new NotFoundException(
+        `Athlete ${dto.athleteId} not found`,
+      );
+    }
+
+    // 3. Check athlete is not already registered
+    const existingRegistration =
+      await this.prisma.categoryAthlete.findUnique({
+        where: {
+          categoryId_athleteId: {
+            categoryId,
+            athleteId: dto.athleteId,
+          },
+        },
+      });
+
+    if (existingRegistration) {
+      throw new BadRequestException(
+        'Athlete is already registered in this category',
+      );
+    }
+
+    // 4. Register athlete
+    return this.prisma.categoryAthlete.create({
+      data: {
+        categoryId,
+        athleteId: dto.athleteId,
+        seed: dto.seed,
+      },
+      include: {
+        athlete: true,
+        category: true,
+      },
+    });
+  }
 
   findAll(search?: string) {
     let where: Prisma.CategoryWhereInput = {};
@@ -32,7 +92,20 @@ export class CategoriesService {
 
     return this.prisma.category.findMany({
       where,
-      include: { tournament: { select: { id: true, name: true } } },
+          include: {
+      tournament: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      _count: {
+        select: {
+          athletes: true,
+          matches: true,
+        },
+      },
+    },
       orderBy: { createdAt: 'desc' },
     });
   }

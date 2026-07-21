@@ -6,8 +6,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateScoreDto } from './dto/create-score.dto';
 import { ScoreHelper } from './helpers/score.helper';
-import { Corner } from './enums/corner.enum';
 import {
+  Corner,
   Prisma,
   SenshuHolder,
   MatchStatus,
@@ -33,6 +33,15 @@ export class ScoringService {
     }
     if (!match.redAthleteId || !match.blueAthleteId) {
       throw new BadRequestException('Match is missing an athlete in one corner');
+    }
+
+    if (dto.entries.length === 2) {
+      const corners = new Set(dto.entries.map((e) => e.corner));
+      if (corners.size !== 2) {
+        throw new BadRequestException(
+          'A two-entry exchange must have one RED and one BLUE entry',
+        );
+      }
     }
 
     const exchangeId = randomUUID();
@@ -75,7 +84,8 @@ export class ScoringService {
       let senshu = match.senshu;
       let senshuScoreEventId = match.senshuScoreEventId;
 
-      const isFirstScoreOfMatch = match.scoreEvents.length === 0 && dto.entries.length === 1;
+      const priorActiveEvents = match.scoreEvents.filter((e) => !e.wasUndone).length;
+      const isFirstScoreOfMatch = priorActiveEvents === 0 && dto.entries.length === 1;
       const isUnopposedScore = dto.entries.length === 1;
 
       if (isFirstScoreOfMatch && isUnopposedScore && !match.senshuLocked) {
@@ -90,27 +100,17 @@ export class ScoringService {
       let resultType: MatchResultType | null = null;
 
       if (mercyRuleTriggered) {
-        // Whoever leads when the mercy-rule gap is hit wins.
-        // NOTE: confirm `MatchResultType.MERCY_RULE` (or whatever your
-        // schema actually calls it) — swap this for the real enum value.
         winnerId = newRedScore > newBlueScore ? match.redAthleteId : match.blueAthleteId;
         resultType = MatchResultType.POINT_GAP;
       }
 
-      const updatedMatch = await tx.match.update({
+      const scoredMatch = await tx.match.update({
         where: { id: matchId },
         data: {
           redScore: newRedScore,
           blueScore: newBlueScore,
           senshu,
           senshuScoreEventId,
-
-          ...(mercyRuleTriggered && {
-            status: MatchStatus.COMPLETED,
-            resultType,
-            winnerId,
-            completedAt: new Date(),
-          }),
         },
         include: {
           redAthlete: true,
@@ -118,18 +118,22 @@ export class ScoringService {
         },
       });
 
-      // Move winner to next round
-      if (mercyRuleTriggered && winnerId) {
-        await this.advanceWinner(tx, matchId, winnerId);
+      let finalMatch = scoredMatch;
+
+      if (mercyRuleTriggered && winnerId && resultType) {
+        finalMatch = await this.completeMatch(tx, matchId, winnerId, resultType);
       }
 
       return {
         success: true,
-        match: updatedMatch,
+        match: finalMatch,
         scoreEvents: createdEvents,
         mercyRuleTriggered,
         senshuAwarded: senshu !== match.senshu,
       };
+    }, {
+      maxWait: 10000,
+      timeout: 20000,
     });
   }
 
@@ -181,10 +185,12 @@ export class ScoringService {
         match: updatedMatch,
         message: 'Score undone successfully',
       };
+    }, {
+      maxWait: 10000,
+      timeout: 20000,
     });
   }
 
-  // Handle Senshu loss in last 15 seconds
   async forfeitSenshu(matchId: string, corner: Corner) {
     const match = await this.prisma.match.findUnique({ where: { id: matchId } });
     if (!match) throw new NotFoundException('Match not found');
@@ -210,22 +216,21 @@ export class ScoringService {
           select: {
             id: true,
             name: true,
-            photoUrl: true,        // ← Add this
-          }
+            photoUrl: true,
+          },
         },
         blueAthlete: {
           select: {
             id: true,
             name: true,
-            photoUrl: true,        // ← Add this
-          }
+            photoUrl: true,
+          },
         },
         category: true,
         scoreEvents: {
           orderBy: { timestamp: 'desc' },
           take: 10,
         },
-        // Add other includes if needed
       },
     });
 
@@ -247,38 +252,139 @@ export class ScoringService {
     });
   }
 
-  // Now takes the active transaction client so the next-match lookup
-  // sees the winner update that hasn't committed yet.
-  private async advanceWinner(
+  async completeMatch(
     tx: Prisma.TransactionClient,
     matchId: string,
     winnerId: string,
-  ){
-    const match = await tx.match.findUnique({
-      where: { id: matchId },
+    resultType: MatchResultType,
+  ) {
+    const result = await tx.match.updateMany({
+      where: {
+        id: matchId,
+        status: { not: MatchStatus.COMPLETED },
+      },
+      data: {
+        status: MatchStatus.COMPLETED,
+        winnerId,
+        resultType,
+        completedAt: new Date(),
+      },
     });
 
-    if (!match?.nextMatchId) return;
+    if (result.count === 0) {
+      throw new BadRequestException('Match is already completed');
+    }
 
-    const nextMatch = await tx.match.findUnique({
-      where: { id: match.nextMatchId },
+    const match = await tx.match.findUnique({ where: { id: matchId } });
+
+    if (!match) {
+      throw new NotFoundException('Match not found after completion');
+    }
+
+    await this.routeWinner(tx, match, winnerId);
+        await this.routeLoser(tx, match, winnerId);
+
+        const completed = await tx.match.findUnique({
+          where: { id: matchId },
+          include: {
+            redAthlete: true,
+            blueAthlete: true,
+          },
+        });
+
+        if (!completed) {
+          throw new NotFoundException('Match not found after completion');
+        }
+
+        return completed;
+      }
+
+  async advanceWinner(
+    tx: Prisma.TransactionClient,
+    matchId: string,
+    winnerId: string,
+  ) {
+    const match = await tx.match.findUnique({ where: { id: matchId } });
+    if (!match) throw new NotFoundException('Match not found');
+    await this.routeWinner(tx, match, winnerId);
+  }
+
+  async advanceLoser(
+    tx: Prisma.TransactionClient,
+    matchId: string,
+    winnerId: string,
+  ) {
+    const match = await tx.match.findUnique({ where: { id: matchId } });
+    if (!match) throw new NotFoundException('Match not found');
+    await this.routeLoser(tx, match, winnerId);
+  }
+
+  private async routeWinner(
+    tx: Prisma.TransactionClient,
+    match: Prisma.MatchGetPayload<{}>,
+    winnerId: string,
+  ) {
+    if (!match.nextMatchId) {
+      return;
+    }
+
+    if (!match.nextCorner) {
+      throw new BadRequestException(
+        'Next corner is not configured for this match',
+      );
+    }
+
+    await tx.match.update({
+      where: {
+        id: match.nextMatchId,
+      },
+      data:
+        match.nextCorner === Corner.RED
+          ? {
+              redAthleteId: winnerId,
+            }
+          : {
+              blueAthleteId: winnerId,
+            },
     });
+  }
 
-    if (!nextMatch) return;
-
-    const data: any = {};
-
-    if (!nextMatch.redAthleteId) {
-      data.redAthleteId = winnerId;
-    } else if (!nextMatch.blueAthleteId) {
-      data.blueAthleteId = winnerId;
+  private async routeLoser(
+    tx: Prisma.TransactionClient,
+    match: Prisma.MatchGetPayload<{}>,
+    winnerId: string,
+  ) {
+    if (!match.loserNextMatchId) {
+      return;
     }
 
-    if (Object.keys(data).length) {
-      await tx.match.update({
-        where: { id: nextMatch.id },
-        data,
-      });
+    const loserId =
+      match.redAthleteId === winnerId
+        ? match.blueAthleteId
+        : match.redAthleteId;
+
+    if (!loserId) {
+      return;
     }
+
+    if (!match.loserNextCorner) {
+      throw new BadRequestException(
+        'loserNextCorner is not configured for this match',
+      );
+    }
+
+    await tx.match.update({
+      where: {
+        id: match.loserNextMatchId,
+      },
+      data:
+        match.loserNextCorner === Corner.RED
+          ? {
+              redAthleteId: loserId,
+            }
+          : {
+              blueAthleteId: loserId,
+            },
+    });
   }
 }

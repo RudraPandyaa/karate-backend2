@@ -1,123 +1,287 @@
-import { MatchRound } from '@prisma/client';
+import {
+  Corner,
+  MatchRound,
+} from '@prisma/client';
 
 export interface GeneratedMatch {
   categoryId: string;
   round: MatchRound;
   bracketSlot: number;
+
+  // Winner advancement
   nextSlot?: number;
+  nextCorner?: Corner;
+
+  // Loser advancement
+  loserNextSlot?: number;
+  loserNextCorner?: Corner;
+
   pool?: number;
   redAthleteId?: string;
   blueAthleteId?: string;
 }
 
-const POOL_SPLIT_THRESHOLD = 16;
-
-const ROUND_BY_DRAW_SIZE: Record<number, MatchRound> = {
-  2: MatchRound.FINAL,
-  4: MatchRound.SEMI_FINAL,
-  8: MatchRound.QUARTER_FINAL,
-  16: MatchRound.ROUND_1,
-  32: MatchRound.ROUND_2,
-};
-
 export class BracketGenerator {
   static generateSingleElimination(
-    categoryAthletes: { athleteId: string; seed: number | null }[],
+    categoryAthletes: {
+      athleteId: string;
+      seed: number | null;
+    }[],
     categoryId: string,
   ): GeneratedMatch[] {
-    const athletes = categoryAthletes.map((a) => a.athleteId);
-
-    if (athletes.length <= POOL_SPLIT_THRESHOLD) {
-      return this.buildPool(athletes, categoryId, undefined, 0).nodes;
+    if (categoryAthletes.length < 2) {
+      return [];
     }
 
-    const mid = Math.ceil(athletes.length / 2);
-    const poolA = this.buildPool(athletes.slice(0, mid), categoryId, 1, 0);
-    const poolB = this.buildPool(athletes.slice(mid), categoryId, 2, poolA.nextSlot);
+    const sortedAthletes = [...categoryAthletes].sort((a, b) => {
+      if (a.seed === null && b.seed === null) return 0;
+      if (a.seed === null) return 1;
+      if (b.seed === null) return -1;
 
-    const finalSlot = poolB.nextSlot;
-    const finalMatch: GeneratedMatch = {
-      categoryId,
-      round: MatchRound.FINAL,
-      bracketSlot: finalSlot,
-    };
-
-    // wire each pool's final match forward into the shared final
-    const poolAFinal = poolA.nodes[poolA.nodes.length - 1];
-    const poolBFinal = poolB.nodes[poolB.nodes.length - 1];
-    poolAFinal.nextSlot = finalSlot;
-    poolBFinal.nextSlot = finalSlot;
-    // pool finals aren't really "FINAL" round anymore — they're semis feeding the real final
-    poolAFinal.round = MatchRound.SEMI_FINAL;
-    poolBFinal.round = MatchRound.SEMI_FINAL;
-
-    return [...poolA.nodes, ...poolB.nodes, finalMatch];
-  }
-
-  private static buildPool(
-    athletes: string[],
-    categoryId: string,
-    pool: number | undefined,
-    slotStart: number,
-  ): { nodes: GeneratedMatch[]; nextSlot: number } {
-    const drawSize = this.nextPow2(athletes.length);
-    const seedPositions = this.seedPositions(drawSize);
-    const slots: (string | undefined)[] = new Array(drawSize).fill(undefined);
-    seedPositions.forEach((pos, i) => {
-      slots[pos - 1] = athletes[i];
+      return a.seed - b.seed;
     });
 
-    let cursor = slotStart;
-    const nodes: GeneratedMatch[] = [];
-    let round = ROUND_BY_DRAW_SIZE[drawSize] ?? MatchRound.ROUND_1;
-    let current = slots;
-    let prevRoundSlots: number[] = [];
+    const athleteIds = sortedAthletes.map(
+      (athlete) => athlete.athleteId,
+    );
 
-    while (current.length >= 2) {
-      const thisRoundSlots: number[] = [];
-      for (let i = 0; i < current.length; i += 2) {
-        const slot = cursor++;
-        thisRoundSlots.push(slot);
-        nodes.push({
+    const drawSize = this.nextPowerOfTwo(
+      athleteIds.length,
+    );
+
+    const totalRounds = Math.log2(drawSize);
+
+    const slots: (string | undefined)[] =
+      new Array(drawSize).fill(undefined);
+
+    const seedPositions = this.generateSeedPositions(
+      drawSize,
+    );
+
+    athleteIds.forEach((athleteId, index) => {
+      const position = seedPositions[index];
+
+      if (position !== undefined) {
+        slots[position - 1] = athleteId;
+      }
+    });
+
+    const matches: GeneratedMatch[] = [];
+
+    let currentSlots = slots;
+
+    let previousRoundMatchSlots: number[] = [];
+
+    let bracketSlot = 0;
+
+    let roundIndex = 0;
+
+    // ==========================================
+    // NORMAL WINNER BRACKET
+    // ==========================================
+
+    while (currentSlots.length >= 2) {
+      const currentRoundMatchSlots: number[] = [];
+
+      const round = this.getRound(
+        totalRounds,
+        roundIndex,
+      );
+
+      for (
+        let i = 0;
+        i < currentSlots.length;
+        i += 2
+      ) {
+        const matchSlot = bracketSlot++;
+
+        matches.push({
           categoryId,
+
           round,
-          bracketSlot: slot,
-          pool,
-          redAthleteId: current[i],
-          blueAthleteId: current[i + 1],
+
+          bracketSlot: matchSlot,
+
+          redAthleteId: currentSlots[i],
+
+          blueAthleteId: currentSlots[i + 1],
         });
+
+        currentRoundMatchSlots.push(matchSlot);
       }
-      if (prevRoundSlots.length) {
-        prevRoundSlots.forEach((prevSlot, idx) => {
-          const node = nodes.find((n) => n.bracketSlot === prevSlot)!;
-          node.nextSlot = thisRoundSlots[Math.floor(idx / 2)];
-        });
+
+      // ==========================================
+      // CONNECT PREVIOUS ROUND WINNERS
+      // ==========================================
+
+      if (previousRoundMatchSlots.length > 0) {
+        previousRoundMatchSlots.forEach(
+          (previousSlot, index) => {
+            const previousMatch =
+              matches.find(
+                (match) =>
+                  match.bracketSlot === previousSlot,
+              );
+
+            if (!previousMatch) return;
+
+            const nextMatchIndex =
+              Math.floor(index / 2);
+
+            const nextMatchSlot =
+              currentRoundMatchSlots[nextMatchIndex];
+
+            previousMatch.nextSlot =
+              nextMatchSlot;
+
+            previousMatch.nextCorner =
+              index % 2 === 0
+                ? Corner.RED
+                : Corner.BLUE;
+          },
+        );
       }
-      prevRoundSlots = thisRoundSlots;
-      current = new Array(current.length / 2).fill(undefined);
-      round =
-        current.length === 1
-          ? MatchRound.FINAL
-          : ROUND_BY_DRAW_SIZE[current.length] ?? MatchRound.ROUND_2;
+
+      previousRoundMatchSlots =
+        currentRoundMatchSlots;
+
+      currentSlots =
+        new Array(
+          currentSlots.length / 2,
+        ).fill(undefined);
+
+      roundIndex++;
     }
 
-    return { nodes, nextSlot: cursor };
+    // ==========================================
+    // ADD BRONZE MEDAL MATCH
+    // ==========================================
+
+    const finalMatch = matches.find(
+      (match) =>
+        match.round === MatchRound.FINAL,
+    );
+
+    if (!finalMatch) {
+      throw new Error(
+        'Final match was not generated',
+      );
+    }
+
+    const semifinalMatches =
+      matches.filter(
+        (match) =>
+          match.round === MatchRound.SEMI_FINAL,
+      );
+
+    const bronzeSlot = bracketSlot++;
+
+    const bronzeMatch: GeneratedMatch = {
+      categoryId,
+
+      round: MatchRound.BRONZE_MEDAL,
+
+      bracketSlot: bronzeSlot,
+    };
+
+    matches.push(bronzeMatch);
+
+    // ==========================================
+    // SEMIFINAL LOSERS -> BRONZE MATCH
+    // ==========================================
+
+    if (semifinalMatches.length === 2) {
+      semifinalMatches[0].loserNextSlot =
+        bronzeSlot;
+
+      semifinalMatches[0].loserNextCorner =
+        Corner.RED;
+
+      semifinalMatches[1].loserNextSlot =
+        bronzeSlot;
+
+      semifinalMatches[1].loserNextCorner =
+        Corner.BLUE;
+    }
+
+    return matches;
   }
 
-  private static nextPow2(n: number): number {
-    let p = 2;
-    while (p < n) p *= 2;
-    return p;
+  private static getRound(
+    totalRounds: number,
+    roundIndex: number,
+  ): MatchRound {
+    const roundsRemaining =
+      totalRounds - roundIndex;
+
+    if (roundsRemaining === 1) {
+      return MatchRound.FINAL;
+    }
+
+    if (roundsRemaining === 2) {
+      return MatchRound.SEMI_FINAL;
+    }
+
+    if (roundsRemaining === 3) {
+      return MatchRound.QUARTER_FINAL;
+    }
+
+    const roundNumber =
+      roundIndex + 1;
+
+    switch (roundNumber) {
+      case 1:
+        return MatchRound.ROUND_1;
+
+      case 2:
+        return MatchRound.ROUND_2;
+
+      case 3:
+        return MatchRound.ROUND_3;
+
+      default:
+        return MatchRound.ROUND_3;
+    }
   }
 
-  private static seedPositions(size: number): number[] {
+  private static nextPowerOfTwo(
+    value: number,
+  ): number {
+    let power = 2;
+
+    while (power < value) {
+      power *= 2;
+    }
+
+    return power;
+  }
+
+  private static generateSeedPositions(
+    size: number,
+  ): number[] {
     let positions = [1];
-    while (positions.length < size) {
+
+    while (
+      positions.length < size
+    ) {
       const next: number[] = [];
-      const total = positions.length * 2 + 1;
-      for (const p of positions) next.push(p, total - p);
+
+      const total =
+        positions.length * 2 + 1;
+
+      for (
+        const position of positions
+      ) {
+        next.push(position);
+
+        next.push(
+          total - position,
+        );
+      }
+
       positions = next;
     }
+
     return positions;
   }
 }

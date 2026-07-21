@@ -18,7 +18,7 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { Role } from '@prisma/client';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
-
+import { RegisterAthleteDto } from './dto/register-athlete';
 // NOTE: CreateCategoryDto currently lives under tournaments/dto because it
 // was only used by TournamentsController's nested POST route. Adjust the
 // import path if you move/duplicate it into categories/dto instead.
@@ -27,6 +27,20 @@ import { Public } from '../auth/decorators/public.decorator';
 @Controller('categories')
 export class CategoriesController {
   constructor(private categoriesService: CategoriesService) {}
+
+  @ApiBearerAuth('JWT')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.ORGANIZER)
+  @Post(':categoryId/athletes')
+  registerAthlete(
+    @Param('categoryId') categoryId: string,
+    @Body() dto: RegisterAthleteDto,
+  ) {
+    return this.categoriesService.registerAthlete(
+      categoryId,
+      dto,
+    );
+  }
 
   // GET /categories?search=...
   // Matches useCategories()'s `refresh()` — frontend currently filters

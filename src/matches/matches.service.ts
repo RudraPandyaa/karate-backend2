@@ -3,10 +3,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateMatchDto } from './dto/create-match.dto';
 import { UpdateMatchDto } from './dto/update-match.dto';
 import { MatchRound, MatchStatus, Role } from '@prisma/client';
+import { ScoringService } from '../scoring/scoring.service';
 
 @Injectable()
 export class MatchesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private scoringService: ScoringService,
+  ) {}
 
   private async assertHasRole(userId: string | undefined | null, role: Role) {
     if (!userId) return;
@@ -84,7 +88,7 @@ export class MatchesService {
   }
 
   async update(id: string, dto: UpdateMatchDto, requesterRole: Role) {
-    await this.findOne(id);
+    const existingMatch = await this.findOne(id);
 
     const isAssigningOfficials = dto.refereeId !== undefined || dto.scorekeeperId !== undefined;
     if (
@@ -100,34 +104,67 @@ export class MatchesService {
       this.assertHasRole(dto.scorekeeperId, Role.SCOREKEEPER),
     ]);
 
-    const updatedMatch = await this.prisma.match.update({
-      where: { id },
-      data: {
-        round: dto.round as MatchRound,
-        status: dto.status as MatchStatus,
-        redScore: dto.redScore,
-        blueScore: dto.blueScore,
-        winnerId: dto.winnerId,
-        timeRemaining: dto.timeRemaining,
-        timerSeconds: dto.timerSeconds,
-        tatamiId: dto.tatamiId,
-        refereeId: dto.refereeId,
-        scorekeeperId: dto.scorekeeperId,
-      },
-      include: {
-        category: true,
-        redAthlete: true,
-        blueAthlete: true,
-        referee: { select: { id: true, name: true, email: true } },
-        scorekeeper: { select: { id: true, name: true, email: true } },
-      },
-    });
+    const isCompleting = dto.status === MatchStatus.COMPLETED && !!dto.winnerId;
 
-    if (dto.status === MatchStatus.COMPLETED && dto.winnerId) {
-      await this.advanceWinner(id, dto.winnerId);
+    if (isCompleting) {
+      if (existingMatch.status === MatchStatus.COMPLETED) {
+        throw new BadRequestException('Match is already completed');
+      }
+
+      if (
+        dto.winnerId !== existingMatch.redAthleteId &&
+        dto.winnerId !== existingMatch.blueAthleteId
+      ) {
+        throw new BadRequestException(
+          'winnerId must be one of the two athletes in this match',
+        );
+      }
     }
 
-    return updatedMatch;
+    // Wrapped in a transaction so "update match fields" + "advance winner"
+    // either both happen or neither does — no more half-completed matches
+    // if advanceWinner throws (e.g. missing nextCorner).
+    return this.prisma.$transaction(async (tx) => {
+      // Non-completion field updates (tatami, officials, in-progress score
+      // edits, timer, etc.) go through directly.
+      const updatedMatch = await tx.match.update({
+        where: { id },
+        data: {
+          round: dto.round as MatchRound,
+          status: isCompleting ? undefined : (dto.status as MatchStatus),
+          redScore: dto.redScore,
+          blueScore: dto.blueScore,
+          winnerId: isCompleting ? undefined : dto.winnerId,
+          timeRemaining: dto.timeRemaining,
+          timerSeconds: dto.timerSeconds,
+          tatamiId: dto.tatamiId,
+          refereeId: dto.refereeId,
+          scorekeeperId: dto.scorekeeperId,
+        },
+        include: {
+          category: true,
+          redAthlete: true,
+          blueAthlete: true,
+          referee: { select: { id: true, name: true, email: true } },
+          scorekeeper: { select: { id: true, name: true, email: true } },
+        },
+      });
+
+      if (isCompleting) {
+        // TODO: this endpoint currently has no way to record WHY the
+        // match was completed (HANSOKU / KIKEN / HANTEI / manual override).
+        // UpdateMatchDto needs a `resultType` field wired through here —
+        // send me update-match.dto.ts and I'll finish this.
+        return this.scoringService.completeMatch(
+          tx,
+          id,
+          dto.winnerId!,
+          (dto as any).resultType ?? 'HANTEI',
+        );
+      }
+
+      return updatedMatch;
+    });
   }
 
   async remove(id: string) {
@@ -135,32 +172,8 @@ export class MatchesService {
     return this.prisma.match.delete({ where: { id } });
   }
 
-  private async advanceWinner(matchId: string, winnerId: string) {
-    const match = await this.prisma.match.findUnique({
-      where: { id: matchId },
-    });
-
-    if (!match?.nextMatchId) return;
-
-    const nextMatch = await this.prisma.match.findUnique({
-      where: { id: match.nextMatchId },
-    });
-
-    if (!nextMatch) return;
-
-    const data: any = {};
-
-    if (!nextMatch.redAthleteId) {
-      data.redAthleteId = winnerId;
-    } else if (!nextMatch.blueAthleteId) {
-      data.blueAthleteId = winnerId;
-    }
-
-    if (Object.keys(data).length > 0) {
-      await this.prisma.match.update({
-        where: { id: nextMatch.id },
-        data,
-      });
-    }
-  }
+  // advanceWinner removed from here on purpose — it was a broken duplicate
+  // of ScoringService.advanceWinner() that ignored nextCorner entirely.
+  // ScoringService.advanceWinner() / completeMatch() is now the single
+  // source of truth, used by both this service and ScoringService.recordExchange().
 }
