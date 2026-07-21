@@ -268,21 +268,20 @@ enum MatchResultType {
 }
 
 enum MatchRound {
-  // Existing values - keep them
   ROUND_1
   ROUND_2
   ROUND_3
-  FINAL_MATCH
-  QUARTERFINAL
-  SEMIFINAL
-
-  // New values
   ROUND_OF_32
   ROUND_OF_16
   QUARTER_FINAL
+  QUARTERFINAL
   SEMI_FINAL
-  BRONZE_MEDAL
+  SEMIFINAL
   FINAL
+  FINAL_MATCH
+  REPECHAGE
+  BRONZE
+  BRONZE_MEDAL     // ← This was missing in some places
 }
 
 enum ScoreType {

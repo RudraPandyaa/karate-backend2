@@ -179,7 +179,7 @@ export class BracketGenerator {
     const bronzeMatch: GeneratedMatch = {
       categoryId,
 
-      round: MatchRound.BRONZE_MEDAL,
+      round: MatchRound.BRONZE_MEDAL as MatchRound,
 
       bracketSlot: bronzeSlot,
     };
